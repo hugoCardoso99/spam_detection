@@ -1,0 +1,27 @@
+Model Evaluation Summary - Dataset: sms
+======================================================================
+
+LogisticRegression:
+  Accuracy:  0.9623
+  Precision: 1.0000
+  Recall:    0.7181
+  F1-Score:  0.8359
+  ROC-AUC:   0.9865
+  PR-AUC:    0.9645
+
+RandomForest:
+  Accuracy:  0.9794
+  Precision: 1.0000
+  Recall:    0.8456
+  F1-Score:  0.9164
+  ROC-AUC:   0.9849
+  PR-AUC:    0.9627
+
+XGBoost:
+  Accuracy:  0.9623
+  Precision: 0.9280
+  Recall:    0.7785
+  F1-Score:  0.8467
+  ROC-AUC:   0.9630
+  PR-AUC:    0.9076
+

@@ -1,0 +1,27 @@
+Model Evaluation Summary - Dataset: enron
+======================================================================
+
+LogisticRegression:
+  Accuracy:  0.9988
+  Precision: 0.9977
+  Recall:    1.0000
+  F1-Score:  0.9988
+  ROC-AUC:   0.9996
+  PR-AUC:    0.9992
+
+RandomForest:
+  Accuracy:  0.9997
+  Precision: 0.9994
+  Recall:    1.0000
+  F1-Score:  0.9997
+  ROC-AUC:   0.9997
+  PR-AUC:    0.9993
+
+XGBoost:
+  Accuracy:  0.9997
+  Precision: 0.9994
+  Recall:    1.0000
+  F1-Score:  0.9997
+  ROC-AUC:   0.9996
+  PR-AUC:    0.9992
+
