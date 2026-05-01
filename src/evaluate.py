@@ -3,6 +3,7 @@ evaluate.py – Compare models on the test set.
 
 Usage:
     python src/evaluate.py --dataset sms
+    python src/evaluate.py --dataset sms --from-db
 """
 
 import argparse
@@ -24,6 +25,10 @@ from sklearn.metrics import precision_recall_curve
 from sklearn.metrics import precision_score
 from sklearn.metrics import recall_score
 from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import train_test_split
+
+from db import load_dataset
+from preprocess import clean_text
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NAMES = ["LogisticRegression", "RandomForest", "XGBoost"]
@@ -34,6 +39,31 @@ CLR = {"LogisticRegression": "#6366f1", "RandomForest": "#22c55e", "XGBoost": "#
 def load_test(ds):
     d = os.path.join(ROOT, "data", ds)
     return sp.load_npz(os.path.join(d, "X_test.npz")), joblib.load(os.path.join(d, "y_test.joblib"))
+
+
+def load_test_from_db(dataset_name, test_size=0.2, random_state=42):
+    """Load raw messages from Postgres, vectorize on-demand, and return test split."""
+    rows = load_dataset(dataset_name)
+    messages = [row["message"] for row in rows]
+    labels = [row["label"] for row in rows]
+
+    cleaned = [clean_text(m) for m in messages]
+
+    # load saved vectorizer
+    vec_path = os.path.join(ROOT, "models", dataset_name, "tfidf_vectorizer.joblib")
+    if not os.path.exists(vec_path):
+        raise FileNotFoundError(
+            "Vectorizer not found at %s. Run train.py --from-db first." % vec_path
+        )
+    vectorizer = joblib.load(vec_path)
+    X = vectorizer.transform(cleaned)
+    y = labels
+
+    # reproduce the same train/test split
+    _, X_test, _, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state, stratify=y,
+    )
+    return X_test, y_test
 
 
 def eval_one(mdl, X, y):
@@ -129,10 +159,13 @@ def load_models(dataset_name):
     return models
 
 
-def evaluate_all(dataset_name):
+def evaluate_all(dataset_name, from_db=False, test_size=0.2, random_state=42):
     """Load test data and models, evaluate, and generate plots."""
     print("\nLoading test data for '%s'..." % dataset_name)
-    X_test, y_test = load_test(dataset_name)
+    if from_db:
+        X_test, y_test = load_test_from_db(dataset_name, test_size=test_size, random_state=random_state)
+    else:
+        X_test, y_test = load_test(dataset_name)
     print("  Test set shape: %s" % (X_test.shape,))
     print("  Spam ratio: %.2f%%" % (100 * y_test.mean()))
 
@@ -190,9 +223,11 @@ def parse_args():
         "--dataset", required=True,
         help="Dataset name (must match the name used in preprocess.py and train.py).",
     )
+    parser.add_argument("--from-db", action="store_true", help="Load raw messages from PostgreSQL instead of preprocessed vectors.")
+    parser.add_argument("--test-size", type=float, default=0.2, help="Test split fraction when using --from-db (default: 0.2).")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    evaluate_all(args.dataset)
+    evaluate_all(args.dataset, from_db=args.from_db, test_size=args.test_size)

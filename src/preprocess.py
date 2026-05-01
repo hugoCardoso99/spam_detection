@@ -25,9 +25,12 @@ import zipfile
 
 import joblib
 import pandas as pd
+import psycopg2.extras
 import scipy.sparse as sp
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
+
+from db import init_db, insert_messages
 
 # ── paths ────────────────────────────────────────────────────────────────
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -156,6 +159,7 @@ def parse_args():
     parser.add_argument("--csv", default=None, help="Path to a CSV file (required for custom datasets).")
     parser.add_argument("--max-features", type=int, default=5000, help="Max TF-IDF features (default: 5000).")
     parser.add_argument("--test-size", type=float, default=0.2, help="Test split fraction (default: 0.2).")
+    parser.add_argument("--use-db", action="store_true", help="Store raw messages in PostgreSQL instead of saving vectors to disk.")
     return parser.parse_args()
 
 
@@ -187,11 +191,17 @@ if __name__ == "__main__":
         test_size=args.test_size,
     )
 
-    # save processed splits
-    data_dir = os.path.join(DATA_DIR, args.dataset)
-    os.makedirs(data_dir, exist_ok=True)
-    sp.save_npz(os.path.join(data_dir, "X_train.npz"), X_train)
-    sp.save_npz(os.path.join(data_dir, "X_test.npz"), X_test)
-    joblib.dump(y_train, os.path.join(data_dir, "y_train.joblib"))
-    joblib.dump(y_test, os.path.join(data_dir, "y_test.joblib"))
-    print("Preprocessed data saved to data/%s/" % args.dataset)
+    # persist
+    if args.use_db:
+        init_db()
+        insert_messages(args.dataset, df["Message"].tolist(), df["label"].tolist())
+        print("Raw messages saved to PostgreSQL (dataset=%s)." % args.dataset)
+    else:
+        # save processed splits
+        data_dir = os.path.join(DATA_DIR, args.dataset)
+        os.makedirs(data_dir, exist_ok=True)
+        sp.save_npz(os.path.join(data_dir, "X_train.npz"), X_train)
+        sp.save_npz(os.path.join(data_dir, "X_test.npz"), X_test)
+        joblib.dump(y_train, os.path.join(data_dir, "y_train.joblib"))
+        joblib.dump(y_test, os.path.join(data_dir, "y_test.joblib"))
+        print("Preprocessed data saved to data/%s/" % args.dataset)
