@@ -1,267 +1,198 @@
 """
-evaluate.py – Load every trained model and compare them on the held-out
-test set using accuracy, precision, recall, F1-score, ROC-AUC, and PR-AUC.
+evaluate.py – Compare models on the test set.
 
-Produces three figures saved to figures/:
-    1. confusion_matrices.png   — side-by-side confusion matrices
-    2. pr_auc_curves.png        — precision-recall curves
-    3. f1_vs_threshold.png      — F1-score across classification thresholds
+Usage:
+    python src/evaluate.py --dataset sms
 """
 
+import argparse
 import os
 
 import joblib
 import matplotlib
-matplotlib.use("Agg")  # non-interactive backend for saving to file
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.sparse as sp
-from sklearn.metrics import (
-    ConfusionMatrixDisplay,
-    accuracy_score,
-    average_precision_score,
-    classification_report,
-    confusion_matrix,
-    f1_score,
-    precision_recall_curve,
-    precision_score,
-    recall_score,
-    roc_auc_score,
-)
+from sklearn.metrics import ConfusionMatrixDisplay
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import average_precision_score
+from sklearn.metrics import classification_report
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import f1_score
+from sklearn.metrics import precision_recall_curve
+from sklearn.metrics import precision_score
+from sklearn.metrics import recall_score
+from sklearn.metrics import roc_auc_score
 
-# ── paths ────────────────────────────────────────────────────────────────
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(ROOT_DIR, "data")
-MODELS_DIR = os.path.join(ROOT_DIR, "models")
-
-MODEL_NAMES = ["LogisticRegression", "RandomForest", "XGBoost"]
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+NAMES = ["LogisticRegression", "RandomForest", "XGBoost"]
+CLS = ["Ham", "Spam"]
+CLR = {"LogisticRegression": "#6366f1", "RandomForest": "#22c55e", "XGBoost": "#f59e0b"}
 
 
-def load_test_data():
-    X_test = sp.load_npz(os.path.join(DATA_DIR, "X_test.npz"))
-    y_test = joblib.load(os.path.join(DATA_DIR, "y_test.joblib"))
-    return X_test, y_test
+def load_test(ds):
+    d = os.path.join(ROOT, "data", ds)
+    return sp.load_npz(os.path.join(d, "X_test.npz")), joblib.load(os.path.join(d, "y_test.joblib"))
 
 
-def evaluate_model(model, X_test, y_test):
-    """Return a dict of metric name -> value for a single model."""
-    y_pred = model.predict(X_test)
-    y_proba = model.predict_proba(X_test)[:, 1]
-
-    # PR-AUC (average_precision_score) is more informative than ROC-AUC
-    # for imbalanced datasets because it focuses on the minority class
-    # and is not inflated by the large number of true negatives.
-    pr_auc = average_precision_score(y_test, y_proba)
-
-    return {
-        "accuracy": accuracy_score(y_test, y_pred),
-        "precision": precision_score(y_test, y_pred),
-        "recall": recall_score(y_test, y_pred),
-        "f1": f1_score(y_test, y_pred),
-        "roc_auc": roc_auc_score(y_test, y_proba),
-        "pr_auc": pr_auc,
-        "y_pred": y_pred,
-        "y_proba": y_proba,
-    }
+def eval_one(mdl, X, y):
+    yp = mdl.predict(X)
+    ypr = mdl.predict_proba(X)[:, 1]
+    return dict(accuracy=accuracy_score(y, yp), precision=precision_score(y, yp),
+                recall=recall_score(y, yp), f1=f1_score(y, yp),
+                roc_auc=roc_auc_score(y, ypr), pr_auc=average_precision_score(y, ypr),
+                y_pred=yp, y_proba=ypr)
 
 
-COLORS = {
-    "LogisticRegression": "#6366f1",
-    "RandomForest": "#22c55e",
-    "XGBoost": "#f59e0b",
-}
-FIGURES_DIR = os.path.join(ROOT_DIR, "figures")
-
-
-# ── plotting helpers ─────────────────────────────────────────────────────
-
-def _find_best_f1_threshold(y_test, y_proba):
-    """Return (best_threshold, best_f1, y_pred_at_best) for the threshold
-    that maximises F1-score."""
-    prec, rec, thresholds = precision_recall_curve(y_test, y_proba)
-    prec = prec[:-1]
-    rec = rec[:-1]
+def best_f1_thr(y, ypr):
+    p, r, t = precision_recall_curve(y, ypr)
+    p, r = p[:-1], r[:-1]
     with np.errstate(divide="ignore", invalid="ignore"):
-        f1_vals = np.where(
-            (prec + rec) > 0,
-            2 * prec * rec / (prec + rec),
-            0.0,
-        )
-    best_idx = np.argmax(f1_vals)
-    best_thr = float(thresholds[best_idx])
-    best_f1 = float(f1_vals[best_idx])
-    y_pred_best = (y_proba >= best_thr).astype(int)
-    return best_thr, best_f1, y_pred_best
+        f = np.where((p+r) > 0, 2*p*r/(p+r), 0.0)
+    i = np.argmax(f)
+    return float(t[i]), float(f[i]), (ypr >= t[i]).astype(int)
 
 
-def plot_confusion_matrices(results, y_test, save_path):
-    """Side-by-side confusion matrices using each model's optimal F1 threshold."""
-    n = len(results)
-    fig, axes = plt.subplots(1, n, figsize=(5 * n, 5))
+def plot_cm(res, yt, path):
+    n = len(res)
+    fig, axes = plt.subplots(1, n, figsize=(5*n, 5))
     if n == 1:
         axes = [axes]
-
-    for ax, (name, m) in zip(axes, results.items()):
-        best_thr, best_f1, y_pred_best = _find_best_f1_threshold(y_test, m["y_proba"])
-        cm = confusion_matrix(y_test, y_pred_best)
-        disp = ConfusionMatrixDisplay(cm, display_labels=["Ham", "Spam"])
-        disp.plot(ax=ax, cmap="Blues", colorbar=False, values_format="d")
-        ax.set_title(
-            "%s\nThreshold = %.2f  |  F1 = %.4f" % (name, best_thr, best_f1),
-            fontsize=12, fontweight="bold",
-        )
-
-    fig.suptitle(
-        "Confusion Matrices (at best-F1 threshold per model)",
-        fontsize=15, fontweight="bold", y=1.03,
-    )
+    for ax, (nm, m) in zip(axes, res.items()):
+        thr, f1v, yp = best_f1_thr(yt, m["y_proba"])
+        cm = confusion_matrix(yt, yp)
+        ConfusionMatrixDisplay(cm, display_labels=CLS).plot(
+            ax=ax, cmap="Blues", colorbar=False, values_format="d")
+        ax.set_title("%s\nThreshold = %.2f  |  F1 = %.4f" % (nm, thr, f1v),
+                     fontsize=12, fontweight="bold")
+    fig.suptitle("Confusion Matrices (at best-F1 threshold per model)",
+                 fontsize=15, fontweight="bold", y=1.03)
     fig.tight_layout()
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print("  Saved: " + save_path)
+    print("  Saved: %s" % path)
 
 
-def plot_pr_curves(results, y_test, save_path):
-    """Overlay precision-recall curves for all models."""
+def plot_pr(res, yt, path):
     fig, ax = plt.subplots(figsize=(7, 5))
-
-    for name, m in results.items():
-        prec, rec, _ = precision_recall_curve(y_test, m["y_proba"])
-        pr_auc_val = m["pr_auc"]
-        label = "%s  (PR-AUC = %.4f)" % (name, pr_auc_val)
-        ax.plot(rec, prec, label=label, color=COLORS.get(name), linewidth=2)
-
-    # baseline: proportion of positives
-    baseline = y_test.sum() / len(y_test)
-    ax.axhline(
-        y=baseline, color="gray", linestyle="--", linewidth=1,
-        label="Baseline (%.2f)" % baseline,
-    )
-
-    ax.set_xlabel("Recall", fontsize=12)
-    ax.set_ylabel("Precision", fontsize=12)
+    for nm, m in res.items():
+        p, r, _ = precision_recall_curve(yt, m["y_proba"])
+        ax.plot(r, p, label="%s  (PR-AUC = %.4f)" % (nm, m["pr_auc"]),
+                color=CLR.get(nm), linewidth=2)
+    bl = yt.sum() / len(yt)
+    ax.axhline(y=bl, color="gray", linestyle="--", linewidth=1,
+               label="Baseline (%.2f)" % bl)
+    ax.set(xlabel="Recall", ylabel="Precision", xlim=[0, 1], ylim=[0, 1.05])
     ax.set_title("Precision-Recall Curves", fontsize=15, fontweight="bold")
     ax.legend(loc="lower left", fontsize=10)
-    ax.set_xlim([0.0, 1.0])
-    ax.set_ylim([0.0, 1.05])
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print("  Saved: " + save_path)
+    print("  Saved: " + path)
 
 
-def plot_f1_vs_threshold(results, y_test, save_path):
-    """F1-score as a function of the classification threshold for each model."""
+def plot_f1(res, yt, path):
     fig, ax = plt.subplots(figsize=(7, 5))
-
-    for name, m in results.items():
-        prec, rec, thresholds = precision_recall_curve(y_test, m["y_proba"])
-        # precision_recall_curve returns n+1 precision/recall values;
-        # thresholds has length n. Trim to align.
-        prec = prec[:-1]
-        rec = rec[:-1]
-
-        # F1 = 2 * (P * R) / (P + R), guarding against division by zero
+    for nm, m in res.items():
+        p, r, t = precision_recall_curve(yt, m["y_proba"])
+        p, r = p[:-1], r[:-1]
         with np.errstate(divide="ignore", invalid="ignore"):
-            f1_vals = np.where(
-                (prec + rec) > 0,
-                2 * prec * rec / (prec + rec),
-                0.0,
-            )
-
-        # find and mark the optimal threshold
-        best_idx = np.argmax(f1_vals)
-        best_f1 = f1_vals[best_idx]
-        best_thr = thresholds[best_idx]
-        label = "%s  (best F1 = %.4f @ %.2f)" % (name, best_f1, best_thr)
-        ax.plot(thresholds, f1_vals, label=label, color=COLORS.get(name), linewidth=2)
-        ax.scatter(
-            best_thr, best_f1,
-            color=COLORS.get(name),
-            s=80, zorder=5, edgecolors="white", linewidths=1.5,
-        )
-
-    ax.set_xlabel("Classification Threshold", fontsize=12)
-    ax.set_ylabel("F1-Score", fontsize=12)
+            fv = np.where((p+r) > 0, 2*p*r/(p+r), 0.0)
+        bi = np.argmax(fv)
+        ax.plot(t, fv, label="%s  (best F1 = %.4f @ %.2f)" % (nm, fv[bi], t[bi]),
+                color=CLR.get(nm), linewidth=2)
+        ax.scatter(t[bi], fv[bi], color=CLR.get(nm), s=80, zorder=5,
+                   edgecolors="white", linewidths=1.5)
+    ax.set(xlabel="Classification Threshold", ylabel="F1-Score",
+           xlim=[0, 1], ylim=[0, 1.05])
     ax.set_title("F1-Score Across Thresholds", fontsize=15, fontweight="bold")
     ax.legend(loc="lower center", fontsize=10)
-    ax.set_xlim([0.0, 1.0])
-    ax.set_ylim([0.0, 1.05])
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print("  Saved: " + save_path)
+    print("  Saved: %s" % path)
 
 
-# ── main comparison ──────────────────────────────────────────────────────
+def load_models(dataset_name):
+    """Load all trained models for a given dataset."""
+    model_dir = os.path.join(ROOT, "models", dataset_name)
+    models = {}
+    for name in NAMES:
+        path = os.path.join(model_dir, "%s.joblib" % name)
+        if os.path.exists(path):
+            models[name] = joblib.load(path)
+        else:
+            raise FileNotFoundError("Model not found: %s" % path)
+    return models
 
-def compare_models():
-    """Evaluate every saved model, print a comparison table, and save plots."""
-    X_test, y_test = load_test_data()
 
+def evaluate_all(dataset_name):
+    """Load test data and models, evaluate, and generate plots."""
+    print("\nLoading test data for '%s'..." % dataset_name)
+    X_test, y_test = load_test(dataset_name)
+    print("  Test set shape: %s" % (X_test.shape,))
+    print("  Spam ratio: %.2f%%" % (100 * y_test.mean()))
+
+    print("\nLoading trained models...")
+    models = load_models(dataset_name)
+    print("  Loaded %d models" % len(models))
+
+    print("\nEvaluating models...")
     results = {}
-    for name in MODEL_NAMES:
-        path = os.path.join(MODELS_DIR, name + ".joblib")
-        if not os.path.exists(path):
-            print("Warning: Model not found: %s  — skipping" % path)
-            continue
-        model = joblib.load(path)
-        metrics = evaluate_model(model, X_test, y_test)
-        results[name] = metrics
+    for name, model in models.items():
+        results[name] = eval_one(model, X_test, y_test)
+        print("  %s: accuracy=%.4f, f1=%.4f, roc_auc=%.4f, pr_auc=%.4f" %
+              (name, results[name]["accuracy"], results[name]["f1"], results[name]["roc_auc"], results[name]["pr_auc"]))
 
-    # ── summary table ────────────────────────────────────────────────
-    header = "%-22s %9s %10s %8s %8s %9s %8s" % (
-        "Model", "Accuracy", "Precision", "Recall", "F1", "ROC-AUC", "PR-AUC",
-    )
-    print("\n" + "=" * len(header))
-    print("MODEL COMPARISON — SMS Spam Detection")
-    print("=" * len(header))
-    print(header)
-    print("-" * len(header))
+    # Create output directory
+    out_dir = os.path.join(ROOT, "results", dataset_name)
+    os.makedirs(out_dir, exist_ok=True)
 
-    for name, m in results.items():
-        print("%-22s %9.4f %10.4f %8.4f %8.4f %9.4f %8.4f" % (
-            name, m["accuracy"], m["precision"],
-            m["recall"], m["f1"], m["roc_auc"], m["pr_auc"],
-        ))
-    print("-" * len(header))
+    # Generate plots
+    print("\nGenerating plots...")
+    plot_cm(results, y_test, os.path.join(out_dir, "confusion_matrix.png"))
+    plot_pr(results, y_test, os.path.join(out_dir, "precision_recall.png"))
+    plot_f1(results, y_test, os.path.join(out_dir, "f1_threshold.png"))
 
-    # ── pick the best model by F1 ────────────────────────────────────
-    best_name = max(results, key=lambda n: results[n]["f1"])
-    best = results[best_name]
-    print("\nBest model (by F1-score): %s  —  F1 = %.4f" % (best_name, best["f1"]))
+    # Print classification reports
+    print("\nClassification Reports:")
+    print("=" * 70)
+    for name, res in results.items():
+        print("\n%s:" % name)
+        print(classification_report(y_test, res["y_pred"], target_names=CLS, digits=4))
 
-    # ── detailed classification reports ──────────────────────────────
-    for name, m in results.items():
-        print("\n" + "-" * 50)
-        print("Classification Report — %s" % name)
-        print("-" * 50)
-        print(classification_report(y_test, m["y_pred"], target_names=["ham", "spam"]))
-        print("Confusion Matrix:")
-        print(confusion_matrix(y_test, m["y_pred"]))
+    # Save metrics summary
+    summary_path = os.path.join(out_dir, "metrics_summary.txt")
+    with open(summary_path, "w") as f:
+        f.write("Model Evaluation Summary - Dataset: %s\n" % dataset_name)
+        f.write("=" * 70 + "\n\n")
+        for name, res in results.items():
+            f.write("%s:\n" % name)
+            f.write("  Accuracy:  %.4f\n" % res["accuracy"])
+            f.write("  Precision: %.4f\n" % res["precision"])
+            f.write("  Recall:    %.4f\n" % res["recall"])
+            f.write("  F1-Score:  %.4f\n" % res["f1"])
+            f.write("  ROC-AUC:   %.4f\n" % res["roc_auc"])
+            f.write("  PR-AUC:    %.4f\n" % res["pr_auc"])
+            f.write("\n")
+    print("  Saved: %s" % summary_path)
 
-    # ── generate and save figures ────────────────────────────────────
-    os.makedirs(FIGURES_DIR, exist_ok=True)
-    print("\nGenerating figures in %s/" % FIGURES_DIR)
-
-    plot_confusion_matrices(
-        results, y_test,
-        os.path.join(FIGURES_DIR, "confusion_matrices.png"),
-    )
-    plot_pr_curves(
-        results, y_test,
-        os.path.join(FIGURES_DIR, "pr_auc_curves.png"),
-    )
-    plot_f1_vs_threshold(
-        results, y_test,
-        os.path.join(FIGURES_DIR, "f1_vs_threshold.png"),
-    )
-
+    print("\nEvaluation complete. Results saved to: %s" % out_dir)
     return results
 
 
-# ── CLI entry point ──────────────────────────────────────────────────────
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate trained classification models.")
+    parser.add_argument(
+        "--dataset", required=True,
+        help="Dataset name (must match the name used in preprocess.py and train.py).",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    compare_models()
+    args = parse_args()
+    evaluate_all(args.dataset)

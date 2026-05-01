@@ -1,8 +1,13 @@
 """
-train.py – Train Logistic Regression, Random Forest, and XGBoost on the
-preprocessed SMS Spam Collection data and save each model to models/.
+train.py – Train Logistic Regression, Random Forest, and XGBoost on a
+preprocessed dataset and save each model to models/<dataset>/.
+
+Usage:
+    python src/train.py --dataset sms
+    python src/train.py --dataset enron
 """
 
+import argparse
 import os
 import time
 
@@ -18,17 +23,18 @@ DATA_DIR = os.path.join(ROOT_DIR, "data")
 MODELS_DIR = os.path.join(ROOT_DIR, "models")
 
 
-def load_splits():
+def load_splits(dataset_name):
     """Load the preprocessed train/test splits produced by preprocess.py."""
-    X_train = sp.load_npz(os.path.join(DATA_DIR, "X_train.npz"))
-    X_test = sp.load_npz(os.path.join(DATA_DIR, "X_test.npz"))
-    y_train = joblib.load(os.path.join(DATA_DIR, "y_train.joblib"))
-    y_test = joblib.load(os.path.join(DATA_DIR, "y_test.joblib"))
+    data_dir = os.path.join(DATA_DIR, dataset_name)
+    X_train = sp.load_npz(os.path.join(data_dir, "X_train.npz"))
+    X_test = sp.load_npz(os.path.join(data_dir, "X_test.npz"))
+    y_train = joblib.load(os.path.join(data_dir, "y_train.joblib"))
+    y_test = joblib.load(os.path.join(data_dir, "y_test.joblib"))
     return X_train, X_test, y_train, y_test
 
 
-def get_models() -> dict:
-    """Return a dict of model name → untrained estimator."""
+def get_models():
+    """Return a dict of model name -> untrained estimator."""
     return {
         "LogisticRegression": LogisticRegression(
             max_iter=1000,
@@ -54,29 +60,41 @@ def get_models() -> dict:
     }
 
 
-def train_all():
+def train_all(dataset_name):
     """Train every model, print timing info, and persist to disk."""
-    X_train, X_test, y_train, y_test = load_splits()
-    os.makedirs(MODELS_DIR, exist_ok=True)
+    X_train, X_test, y_train, y_test = load_splits(dataset_name)
+    model_dir = os.path.join(MODELS_DIR, dataset_name)
+    os.makedirs(model_dir, exist_ok=True)
 
     trained = {}
     for name, model in get_models().items():
-        print(f"\n{'='*50}")
-        print(f"Training {name} …")
+        print("\n" + "=" * 50)
+        print("Training %s ..." % name)
         start = time.time()
         model.fit(X_train, y_train)
         elapsed = time.time() - start
-        print(f"  ✓ Trained in {elapsed:.2f}s")
+        print("  Trained in %.2fs" % elapsed)
 
-        path = os.path.join(MODELS_DIR, f"{name}.joblib")
+        path = os.path.join(model_dir, "%s.joblib" % name)
         joblib.dump(model, path)
-        print(f"  ✓ Saved → {path}")
+        print("  Saved: %s" % path)
         trained[name] = model
 
     return trained
 
 
 # ── CLI entry point ──────────────────────────────────────────────────────
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train classification models.")
+    parser.add_argument(
+        "--dataset", required=True,
+        help="Dataset name (must match the name used in preprocess.py).",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    train_all()
-    print("\nAll models trained and saved to models/")
+    args = parse_args()
+    train_all(args.dataset)
+    print("\nAll models trained and saved to models/%s/" % args.dataset)
